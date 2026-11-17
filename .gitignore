@@ -150,6 +150,8 @@ activemq-data/
 *.sage.py
 
 # Environments
+__pycache__/
+*.pyc
 .env
 .envrc
 .venv
