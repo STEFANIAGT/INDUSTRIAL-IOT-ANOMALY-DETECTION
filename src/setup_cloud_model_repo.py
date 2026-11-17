@@ -6,7 +6,9 @@ from pathlib import Path
 import requests
 
 IN_BASE = "http://127.0.0.1:8081/cse-in"
-MODEL_MANAGER = "CModelManagerAE"
+
+ADMIN = "CAdmin"
+MODEL_MANAGER_REGISTRATION_ORIGINATOR = "CModelManagerAE"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODEL_FILE = PROJECT_ROOT / "models" / "anomaly_model.joblib"
@@ -18,12 +20,16 @@ def headers(originator, resource_type=None):
         "X-M2M-RI": f"req-{uuid.uuid4().hex[:8]}",
         "X-M2M-RVI": "4",
         "Accept": "application/json",
+        "Content-Type": "application/json",
     }
     if resource_type is not None:
         h["Content-Type"] = f"application/json;ty={resource_type}"
-    else:
-        h["Content-Type"] = "application/json"
     return h
+
+
+def get(path, originator=ADMIN):
+    url = IN_BASE if not path else f"{IN_BASE}/{path}"
+    return requests.get(url, headers=headers(originator), timeout=5)
 
 
 def sha256_file(path):
@@ -34,117 +40,197 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def get(path, originator="CAdmin"):
-    return requests.get(
-        f"{IN_BASE}/{path}" if path else IN_BASE,
-        headers=headers(originator),
-        timeout=5,
-    )
+def ensure_model_manager_ae():
+    r = get("ModelManagerAE", ADMIN)
 
+    if r.status_code == 200:
+        ae = r.json().get("m2m:ae", {})
+        aei = ae.get("aei")
+        if not aei:
+            raise RuntimeError("ModelManagerAE exists but no AE-ID (aei) was returned.")
+        print(f"[SKIP] ModelManagerAE already exists (aei={aei})")
+        return aei
 
-def create(url, originator, ty, body, label):
+    if r.status_code != 404:
+        raise RuntimeError(
+            f"Cannot check ModelManagerAE: HTTP {r.status_code} - {r.text}"
+        )
+
+    body = {
+        "m2m:ae": {
+            "rn": "ModelManagerAE",
+            "api": "Norg.unimore.elektra.modelmanager",
+            "rr": True,
+            "srv": ["4"],
+        }
+    }
+
     r = requests.post(
-        url,
-        headers=headers(originator, ty),
+        IN_BASE,
+        headers=headers(MODEL_MANAGER_REGISTRATION_ORIGINATOR, 2),
         json=body,
         timeout=5,
     )
 
-    if r.status_code in (200, 201):
-        print(f"[OK] Created: {label}")
-        try:
-            return r.json()
-        except ValueError:
-            return None
+    if r.status_code not in (200, 201):
+        raise RuntimeError(
+            f"Cannot create ModelManagerAE: HTTP {r.status_code} - {r.text}"
+        )
 
-    if r.status_code == 409:
-        print(f"[SKIP] Already exists: {label}")
-        return None
+    ae = r.json().get("m2m:ae", {})
+    aei = ae.get("aei")
+    if not aei:
+        raise RuntimeError("ModelManagerAE created but no AE-ID was returned.")
 
-    print(f"[ERROR] {label}: HTTP {r.status_code}")
-    print(r.text)
-    raise SystemExit(1)
+    print(f"[OK] Created ModelManagerAE (aei={aei})")
+    return aei
 
 
-def main():
-    print("Setting up cloud model repository on IN-CSE...")
-    print()
+def ensure_container(path, rn, originator, mni=20):
+    r = get(path, ADMIN)
 
-    r = get("")
-    if r.status_code != 200:
-        print(f"[ERROR] IN-CSE not reachable: HTTP {r.status_code}")
-        print(r.text)
-        raise SystemExit(1)
+    if r.status_code == 200:
+        if "m2m:cnt" not in r.json():
+            raise RuntimeError(f"{path} exists but is not a Container.")
+        print(f"[SKIP] {rn} already exists")
+        return
 
-    print("[OK] IN-CSE reachable on port 8081")
+    if r.status_code != 404:
+        raise RuntimeError(
+            f"Cannot check {path}: HTTP {r.status_code} - {r.text}"
+        )
 
-    ae_result = create(
-        IN_BASE,
-        MODEL_MANAGER,
-        2,
-        {
-            "m2m:ae": {
-                "rn": "ModelManagerAE",
-                "api": "Norg.unimore.elektra.modelmanager",
-                "rr": True,
-                "srv": ["4"],
-            }
-        },
-        "ModelManagerAE",
+    parent = path.rsplit("/", 1)[0]
+    body = {"m2m:cnt": {"rn": rn, "mni": mni}}
+
+    r = requests.post(
+        f"{IN_BASE}/{parent}",
+        headers=headers(originator, 3),
+        json=body,
+        timeout=5,
     )
 
-    originator = MODEL_MANAGER
-    if isinstance(ae_result, dict):
-        originator = ae_result.get("m2m:ae", {}).get("aei", MODEL_MANAGER)
+    if r.status_code not in (200, 201):
+        raise RuntimeError(
+            f"Cannot create {rn}: HTTP {r.status_code} - {r.text}"
+        )
 
-    create(
-        f"{IN_BASE}/ModelManagerAE",
-        originator,
-        3,
-        {"m2m:cnt": {"rn": "modelRepo", "mni": 20}},
-        "modelRepo",
-    )
+    print(f"[OK] Created {rn}")
 
-    create(
-        f"{IN_BASE}/ModelManagerAE/modelRepo",
-        originator,
-        3,
-        {"m2m:cnt": {"rn": "anomalyModel", "mni": 20}},
-        "anomalyModel",
-    )
 
+def desired_v1_metadata():
     if not MODEL_FILE.exists():
-        print(f"[ERROR] Local model file not found: {MODEL_FILE}")
-        raise SystemExit(1)
+        raise RuntimeError(f"Local v1 model file not found: {MODEL_FILE}")
 
-    metadata = {
+    return {
         "modelName": "motor-anomaly-detector",
         "version": "v1",
         "algorithm": "OneClassSVM",
         "file": MODEL_FILE.name,
         "sha256": sha256_file(MODEL_FILE),
-        "createdAt": datetime.now(timezone.utc).isoformat(),
         "target": "MN-CSE /id-mn",
         "deploymentStatus": "available",
     }
 
-    create(
-        f"{IN_BASE}/ModelManagerAE/modelRepo/anomalyModel",
-        originator,
-        4,
-        {"m2m:cin": {"rn": "v1", "con": metadata}},
-        "model version v1",
+
+def ensure_v1(originator):
+    desired = desired_v1_metadata()
+
+    r = get(
+        "ModelManagerAE/modelRepo/anomalyModel/v1",
+        ADMIN,
     )
 
+    if r.status_code == 200:
+        cin = r.json().get("m2m:cin", {})
+        con = cin.get("con", {})
+
+        if not isinstance(con, dict):
+            raise RuntimeError("Cloud model v1 exists but metadata is not a JSON object.")
+
+        if con.get("version") != "v1":
+            raise RuntimeError("Resource named v1 exists but metadata version is not v1.")
+
+        existing_hash = con.get("sha256")
+        if existing_hash != desired["sha256"]:
+            raise RuntimeError(
+                "Cloud v1 already exists but its SHA-256 does not match "
+                "models/anomaly_model.joblib. "
+                "Do not overwrite an existing model version automatically."
+            )
+
+        print("[SKIP] Cloud model v1 already exists and checksum matches")
+        return
+
+    if r.status_code != 404:
+        raise RuntimeError(
+            f"Cannot check cloud v1: HTTP {r.status_code} - {r.text}"
+        )
+
+    metadata = {
+        **desired,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+    r = requests.post(
+        f"{IN_BASE}/ModelManagerAE/modelRepo/anomalyModel",
+        headers=headers(originator, 4),
+        json={
+            "m2m:cin": {
+                "rn": "v1",
+                "con": metadata,
+            }
+        },
+        timeout=10,
+    )
+
+    if r.status_code not in (200, 201):
+        raise RuntimeError(
+            f"Cannot create cloud model v1: HTTP {r.status_code} - {r.text}"
+        )
+
+    print("[OK] Created cloud model version v1")
+
+
+def main():
+    print("ELEKTRA - idempotent cloud model repository setup")
+    print("-" * 60)
+
+    try:
+        r = get("", ADMIN)
+        if r.status_code != 200:
+            raise RuntimeError(
+                f"IN-CSE is not reachable: HTTP {r.status_code} - {r.text}"
+            )
+
+        print("[OK] IN-CSE reachable on port 8081")
+
+        model_manager_aei = ensure_model_manager_ae()
+
+        ensure_container(
+            "ModelManagerAE/modelRepo",
+            "modelRepo",
+            model_manager_aei,
+        )
+
+        ensure_container(
+            "ModelManagerAE/modelRepo/anomalyModel",
+            "anomalyModel",
+            model_manager_aei,
+        )
+
+        ensure_v1(model_manager_aei)
+
+    except requests.RequestException as exc:
+        print(f"[ERROR] Cannot contact IN-CSE: {exc}")
+        raise SystemExit(1)
+    except RuntimeError as exc:
+        print(f"[ERROR] {exc}")
+        raise SystemExit(1)
+
     print()
-    print("DONE. Cloud model repository is ready.")
-    print()
-    print("Expected IN-CSE tree:")
-    print("cse-in")
-    print("`-- ModelManagerAE")
-    print("    `-- modelRepo")
-    print("        `-- anomalyModel")
-    print("            `-- v1")
+    print("[DONE] Cloud model repository is ready.")
+    print("The script can be safely executed again.")
 
 
 if __name__ == "__main__":
