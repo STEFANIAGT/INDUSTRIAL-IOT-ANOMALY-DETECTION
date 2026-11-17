@@ -219,7 +219,7 @@ The current prototype uses oneM2M for the sensor data and model management data 
 ## Project Structure
 
 ```text
-mvp/
+INDUSTRIAL-IOT-ANOMALY-DETECTION/
 ├── data/
 │   └── training_normal.csv
 ├── in-cse-runtime/
