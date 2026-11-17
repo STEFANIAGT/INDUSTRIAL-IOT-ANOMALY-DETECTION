@@ -297,6 +297,24 @@ The repository contains example ACME configuration files. Copy them before start
 ```powershell
 Copy-Item acme.example.ini acme.ini
 Copy-Item .\in-cse-runtime\acme.example.ini .\in-cse-runtime\acme.ini
+```
+
+The local `acme.ini` files are used as runtime configuration and are excluded from Git.
+
+Before starting the IN-CSE, open:
+
+```text
+in-cse-runtime\acme.ini
+```
+
+and replace:
+
+```text
+secret=CHANGE_ME
+```
+
+with a local secret value.
+
 ---
 
 # Running the Prototype
