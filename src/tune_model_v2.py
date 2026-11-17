@@ -28,6 +28,9 @@ CANDIDATE_NU = [0.003, 0.005, 0.008, 0.010, 0.012, 0.015]
 NORMAL_VALIDATION = 800
 ANOMALY_VALIDATION = 250
 
+# Fixed seed: repeated executions use the same synthetic validation set.
+RANDOM_SEED = 20261115
+
 
 def headers(originator, resource_type=None):
     h = {
@@ -35,11 +38,10 @@ def headers(originator, resource_type=None):
         "X-M2M-RI": f"req-{uuid.uuid4().hex[:8]}",
         "X-M2M-RVI": "4",
         "Accept": "application/json",
+        "Content-Type": "application/json",
     }
     if resource_type is not None:
         h["Content-Type"] = f"application/json;ty={resource_type}"
-    else:
-        h["Content-Type"] = "application/json"
     return h
 
 
@@ -58,9 +60,8 @@ def reading_row(reading):
 
 
 def build_validation_sets():
-    # Reproducible tuning run.
-    random.seed(20261115)
-    np.random.seed(20261115)
+    random.seed(RANDOM_SEED)
+    np.random.seed(RANDOM_SEED)
 
     normal = pd.DataFrame(
         [reading_row(normal_reading()) for _ in range(NORMAL_VALIDATION)],
@@ -94,14 +95,13 @@ def evaluate_candidates(X_train, X_normal, X_anomaly):
         fpr = false_positives / len(X_normal)
         detection = true_anomalies / len(X_anomaly)
 
-        results.append(
-            {
-                "nu": nu,
-                "fpr": fpr,
-                "detection": detection,
-                "model": model,
-            }
-        )
+        result = {
+            "nu": nu,
+            "fpr": fpr,
+            "detection": detection,
+            "model": model,
+        }
+        results.append(result)
 
         print(
             f"nu={nu:0.3f} | "
@@ -109,128 +109,168 @@ def evaluate_candidates(X_train, X_normal, X_anomaly):
             f"anomaly detection={detection:6.2%}"
         )
 
-    # Prefer models with >=95% anomaly detection. Among those, minimize false
-    # positives first, then maximize anomaly detection.
     acceptable = [r for r in results if r["detection"] >= 0.95]
 
     if acceptable:
-        best = min(
+        return min(
             acceptable,
             key=lambda r: (r["fpr"], -r["detection"], r["nu"]),
         )
-    else:
-        # Fallback: maximize a score that strongly penalizes false positives.
-        best = max(
-            results,
-            key=lambda r: (r["detection"] - 2.0 * r["fpr"], r["detection"]),
-        )
 
-    return best
+    return max(
+        results,
+        key=lambda r: (r["detection"] - 2.0 * r["fpr"], r["detection"]),
+    )
 
 
 def sha256_bytes(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def save_and_publish(best):
-    model = best["model"]
-    nu = best["nu"]
-
+def build_model_artifact(best):
     MODEL_FILE.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, MODEL_FILE, compress=3)
+
+    # Dump to the official v2 path.
+    joblib.dump(best["model"], MODEL_FILE, compress=3)
 
     raw = MODEL_FILE.read_bytes()
     digest = sha256_bytes(raw)
     payload = base64.b64encode(raw).decode("ascii")
 
     print()
-    print(f"[SELECTED] nu={nu}")
+    print(f"[SELECTED] nu={best['nu']}")
     print(f"[SELECTED] false-positive rate={best['fpr']:.2%}")
     print(f"[SELECTED] anomaly detection={best['detection']:.2%}")
-    print(f"[OK] Saved tuned model: {MODEL_FILE.name}")
+    print(f"[OK] Local tuned model ready: {MODEL_FILE.name}")
     print(f"[INFO] SHA-256: {digest}")
 
-    v2_url = f"{IN_BASE}/ModelManagerAE/modelRepo/anomalyModel/v2"
+    return raw, digest, payload
 
-    existing = requests.get(
-        v2_url,
+
+def get_existing_cloud_v2():
+    r = requests.get(
+        f"{IN_BASE}/ModelManagerAE/modelRepo/anomalyModel/v2",
         headers=headers(MODEL_MANAGER),
         timeout=10,
     )
 
-    if existing.status_code == 200:
+    if r.status_code == 404:
+        return None
+
+    if r.status_code != 200:
+        raise RuntimeError(
+            f"Cannot check cloud v2: HTTP {r.status_code} - {r.text}"
+        )
+
+    con = r.json().get("m2m:cin", {}).get("con")
+    if not isinstance(con, dict):
+        raise RuntimeError("Existing cloud v2 metadata is invalid.")
+
+    return con
+
+
+def publish_or_skip(best, digest, payload):
+    existing = get_existing_cloud_v2()
+
+    if existing and existing.get("sha256") == digest:
+        print("[SKIP] Cloud v2 already contains the same model checksum")
+        print(
+            f"[OK] Existing cloud v2: nu={existing.get('nu')} | "
+            f"FPR={existing.get('validationFalsePositiveRate')} | "
+            f"detection={existing.get('validationAnomalyDetectionRate')}"
+        )
+        return
+
+    if existing:
         r = requests.delete(
-            v2_url,
+            f"{IN_BASE}/ModelManagerAE/modelRepo/anomalyModel/v2",
             headers=headers(MODEL_MANAGER),
             timeout=10,
         )
+
         if r.status_code not in (200, 202, 204):
-            print(f"[ERROR] Cannot replace old v2: HTTP {r.status_code}")
-            print(r.text)
-            raise SystemExit(1)
+            raise RuntimeError(
+                f"Cannot replace old cloud v2: HTTP {r.status_code} - {r.text}"
+            )
 
-        print("[OK] Removed previous cloud v2.")
+        print("[OK] Removed previous cloud v2 because the tuned model changed")
 
-    body = {
-        "m2m:cin": {
-            "rn": "v2",
-            "con": {
-                "modelName": "motor-anomaly-detector",
-                "version": "v2",
-                "status": "available",
-                "algorithm": "OneClassSVM",
-                "nu": nu,
-                "validationFalsePositiveRate": round(best["fpr"], 6),
-                "validationAnomalyDetectionRate": round(best["detection"], 6),
-                "file": MODEL_FILE.name,
-                "sha256": digest,
-                "createdAt": datetime.now(timezone.utc).isoformat(),
-                "target": "MN-CSE /id-mn",
-                "encoding": "base64",
-                "payloadBase64": payload,
-            }
-        }
+    metadata = {
+        "modelName": "motor-anomaly-detector",
+        "version": "v2",
+        "status": "available",
+        "algorithm": "OneClassSVM",
+        "nu": best["nu"],
+        "validationFalsePositiveRate": round(best["fpr"], 6),
+        "validationAnomalyDetectionRate": round(best["detection"], 6),
+        "file": MODEL_FILE.name,
+        "sha256": digest,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "target": "MN-CSE /id-mn",
+        "encoding": "base64",
+        "payloadBase64": payload,
     }
 
     r = requests.post(
         f"{IN_BASE}/ModelManagerAE/modelRepo/anomalyModel",
         headers=headers(MODEL_MANAGER, 4),
-        json=body,
+        json={"m2m:cin": {"rn": "v2", "con": metadata}},
         timeout=30,
     )
 
     if r.status_code not in (200, 201):
-        print(f"[ERROR] Cannot publish tuned v2: HTTP {r.status_code}")
-        print(r.text)
-        raise SystemExit(1)
+        raise RuntimeError(
+            f"Cannot publish tuned v2: HTTP {r.status_code} - {r.text}"
+        )
 
-    print("[OK] Published tuned v2 to IN-CSE modelRepo.")
+    print("[OK] Published tuned v2 to IN-CSE modelRepo")
 
 
 def main():
-    print("Tuning model v2 to reduce false positives...")
-    print()
+    print("ELEKTRA - idempotent model v2 tuning")
+    print("-" * 60)
 
-    if not TRAINING_FILE.exists():
-        print(f"[ERROR] Training file not found: {TRAINING_FILE}")
+    try:
+        if not TRAINING_FILE.exists():
+            raise RuntimeError(f"Training file not found: {TRAINING_FILE}")
+
+        df = pd.read_csv(TRAINING_FILE)
+        missing = [c for c in FEATURES if c not in df.columns]
+        if missing:
+            raise RuntimeError(f"Missing training columns: {missing}")
+
+        # Make sure the cloud repository exists before tuning/publishing.
+        r = requests.get(
+            f"{IN_BASE}/ModelManagerAE/modelRepo/anomalyModel",
+            headers=headers(MODEL_MANAGER),
+            timeout=5,
+        )
+        if r.status_code != 200:
+            raise RuntimeError(
+                "Cloud anomalyModel repository is not available. "
+                "Run setup_cloud_model_repo.py and setup_cloud_repo_acp.py first."
+            )
+
+        X_train = df[FEATURES]
+        X_normal, X_anomaly = build_validation_sets()
+
+        best = evaluate_candidates(X_train, X_normal, X_anomaly)
+        _, digest, payload = build_model_artifact(best)
+        publish_or_skip(best, digest, payload)
+
+    except requests.RequestException as exc:
+        print(f"[ERROR] Cannot contact IN-CSE: {exc}")
+        raise SystemExit(1)
+    except RuntimeError as exc:
+        print(f"[ERROR] {exc}")
         raise SystemExit(1)
 
-    df = pd.read_csv(TRAINING_FILE)
-    missing = [c for c in FEATURES if c not in df.columns]
-    if missing:
-        print(f"[ERROR] Missing training columns: {missing}")
-        raise SystemExit(1)
-
-    X_train = df[FEATURES]
-    X_normal, X_anomaly = build_validation_sets()
-
-    best = evaluate_candidates(X_train, X_normal, X_anomaly)
-    save_and_publish(best)
-
     print()
-    print("DONE. Tuned v2 is available in the cloud.")
-    print("Next: run deploy_model_v2_to_edge.py again.")
+    print("[DONE] Tuned v2 is ready in the cloud.")
+    print("The script can be safely executed again.")
+    print("Next: run deploy_model_v2_to_edge.py.")
 
 
 if __name__ == "__main__":
     main()
+
