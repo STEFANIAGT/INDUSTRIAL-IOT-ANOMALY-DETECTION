@@ -1,5 +1,7 @@
 # INDUSTRIAL-IOT-ANOMALY-DETECTION with oneM2M and ETSI MEC
+
 IoT hackathon project for monitoring an industrial motor using temperature, vibration and current sensors with oneM2M data collection, ETSI MEC edge computing and AI anomaly detection.
+
 # Industrial IoT Anomaly Detection
 
 An Industrial IoT prototype for detecting anomalous operating conditions in an electric motor.
@@ -23,7 +25,7 @@ A **One-Class SVM** model is trained using normal operating data. The model is t
 
 ## Architecture
 
-```text
+```
                          CLOUD / CENTRAL
                    +-----------------------+
                    |        IN-CSE         |
@@ -73,6 +75,7 @@ A **One-Class SVM** model is trained using normal operating data. The model is t
                    | MEC011 READY           |
                    | Service discovery     |
                    +-----------------------+
+
 ```
 
 The oneM2M architecture manages sensor data, subscriptions, access control, and model distribution. The ETSI MEC Sandbox is used to demonstrate MEC application enablement and service discovery.
@@ -85,12 +88,13 @@ The oneM2M architecture manages sensor data, subscriptions, access control, and 
 
 Motor measurements are stored as oneM2M **TimeSeries** resources.
 
-```text
+```
 SensorAE
 └── machine01
     ├── temperature
     ├── vibration
     └── current
+
 ```
 
 Each sensor measurement is stored as a **TimeSeriesInstance**.
@@ -103,7 +107,7 @@ The publisher sends temperature, vibration, and current measurements sequentiall
 
 The processing flow is:
 
-```text
+```
 New motor sample
        |
        v
@@ -123,6 +127,7 @@ NORMAL / ANOMALY
        |
        v
 oneM2M alert
+
 ```
 
 ### 3. Access Control Policies
@@ -135,15 +140,12 @@ The intended permissions are:
   - `CSensorAE`: CREATE and RETRIEVE
   - `CAnomalyDetectionAE`: RETRIEVE
   - `CAdmin`: full access
-
 - `alertsACP`
   - `CAnomalyDetectionAE`: CREATE and RETRIEVE
   - `CAdmin`: full access
-
 - `modelACP`
   - `CAnomalyDetectionAE`: RETRIEVE
   - `CAdmin`: full access
-
 - `cloudModelRepoACP`
   - Allows the MN-CSE to retrieve model versions from the IN-CSE.
 
@@ -153,17 +155,18 @@ These policies separate sensor data access, alert creation, and model retrieval.
 
 The central IN-CSE contains the model repository:
 
-```text
+```
 ModelManagerAE
 └── modelRepo
     └── anomalyModel
         ├── v1
         └── v2
+
 ```
 
 The deployment process is:
 
-```text
+```
 Central training / tuning
           |
           v
@@ -186,6 +189,7 @@ MN-CSE /model
           |
           v
 version=v2, status=active
+
 ```
 
 The anomaly detection application reads the active model metadata from the MN-CSE `/model` resource and loads the corresponding model file.
@@ -218,7 +222,7 @@ The current prototype uses oneM2M for the sensor data and model management data 
 
 ## Project Structure
 
-```text
+```
 INDUSTRIAL-IOT-ANOMALY-DETECTION/
 ├── data/
 │   └── training_normal.csv
@@ -246,6 +250,7 @@ INDUSTRIAL-IOT-ANOMALY-DETECTION/
 ├── acme.example.ini
 ├── README.md
 └── requirements.txt
+
 ```
 
 ---
@@ -259,13 +264,14 @@ The prototype was developed and tested with:
 
 Python dependencies are listed in `requirements.txt`:
 
-```text
+```
 numpy
 pandas
 scikit-learn
 joblib
 requests
 acmecse
+
 ```
 
 ---
@@ -274,22 +280,23 @@ acmecse
 
 ### 1. Create a virtual environment
 
-```powershell
+```
 python -m venv .venv
 ```
 
 ### 2. Activate the environment (PowerShell)
 
-```powershell
+```
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 ```
 
 ### 3. Install dependencies
 
-```powershell
+```
 pip install -r requirements.txt
 ```
+
 ### 4. Create the local ACME configuration files
 
 The repository contains example ACME configuration files. Copy them before starting the CSEs:
@@ -330,11 +337,11 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 acmecse -dir .\in-cse-runtime
 ```
-
 The IN-CSE runs at:
 
-```text
+```
 http://127.0.0.1:8081
+
 ```
 
 ## 2. Start the MN-CSE
@@ -349,8 +356,9 @@ acmecse
 
 The MN-CSE runs at:
 
-```text
+```
 http://127.0.0.1:8080
+
 ```
 
 The MN-CSE registers with the IN-CSE through the oneM2M **Mcc** reference point.
@@ -365,13 +373,9 @@ python src\setup_acp.py
 python src\setup_model_resource.py
 ```
 
-Then create the subscription:
+These scripts create or verify the required oneM2M sensor resources, the Anomaly Detection AE, the alerts container, Access Control Policies, and the local model resource.
 
-```powershell
-python src\create_subscription.py
-```
-
-The setup scripts create the sensor resources, configure access control, initialize the model resource, and create the subscription.
+The setup scripts are idempotent and can safely be executed again. Existing correctly configured resources are reused instead of being duplicated.
 
 ## 4. Configure the Cloud Model Repository
 
@@ -382,7 +386,9 @@ python src\setup_cloud_model_repo.py
 python src\setup_cloud_repo_acp.py
 ```
 
-These scripts initialize the model repository in the IN-CSE and configure its access control policy.
+These scripts initialize or verify the centralized model repository in the IN-CSE and configure its Access Control Policy.
+
+They can safely be executed multiple times.
 
 ## 5. Train the Initial Model
 
@@ -394,8 +400,9 @@ python src\train_model.py
 
 This generates:
 
-```text
+```
 models/anomaly_model.joblib
+
 ```
 
 The model is trained using simulated normal motor measurements.
@@ -441,12 +448,21 @@ python src\notification_server.py
 
 Expected startup output:
 
-```text
+```
 ELEKTRA - Anomaly Detection AE notification server
 Sensor storage: oneM2M TimeSeries / TimeSeriesInstance
 Model selection: active version from MN-CSE /model
 Listening on http://127.0.0.1:9999/notify
+
 ```
+
+With the notification server running, open another PowerShell terminal and create or verify the oneM2M subscription:
+
+```powershell
+python src\create_subscription.py
+```
+
+The subscription script is idempotent. If the correctly configured subscription already exists, it is reused.
 
 The notification server receives oneM2M notifications, retrieves the latest sensor measurements, loads the active model, and performs inference.
 
@@ -460,21 +476,23 @@ python src\publish_sensor_data.py
 
 Example output:
 
-```text
+```
 #01  T=65.62 C | V=0.335 | I=7.98 A  -> TimeSeries published (normal)
 ...
 #05  ... -> TimeSeries published (ANOMALOUS TEST READING)
+
 ```
 
 The notification server automatically performs inference when a notification is received.
 
 Example output:
 
-```text
+```
 [MODEL] Loaded active model v2: anomaly_model_v2.joblib
 [AI] ... | NORMAL | model=v2
 [AI] ... | ANOMALY | model=v2
 [ALERT] Saved automatically in oneM2M.
+
 ```
 
 Detected anomalies are stored as oneM2M alert resources.
@@ -487,9 +505,10 @@ The current MEC integration uses an externally created MEC Application Instance.
 
 The corresponding local scripts are:
 
-```text
+```
 src/mec_confirm_ready.py
 src/mec_discover_services.py
+
 ```
 
 Before using these scripts in a new Sandbox session, update the configuration values inside them with:
@@ -499,7 +518,7 @@ Before using these scripts in a new Sandbox session, update the configuration va
 
 The interaction flow is:
 
-```text
+```
 Create MEC Application Instance
              |
              v
@@ -513,6 +532,7 @@ mec_discover_services.py
              |
              v
 HTTP 200 + available services
+
 ```
 
 The scripts demonstrate MEC application readiness confirmation and service discovery through the ETSI MEC APIs.
@@ -523,11 +543,12 @@ The scripts demonstrate MEC application readiness confirmation and service disco
 
 The anomaly detector uses the following pipeline:
 
-```text
+```
 StandardScaler
       |
       v
 One-Class SVM
+
 ```
 
 The training dataset contains simulated **normal** motor behaviour.
@@ -539,9 +560,10 @@ The tuned v2 model is selected by comparing different `nu` values using:
 
 In the current synthetic validation run, the selected v2 model achieved:
 
-```text
+```
 False-positive rate: approximately 2.38%
 Anomaly detection rate: 100%
+
 ```
 
 These results refer exclusively to the synthetic prototype dataset. They are not real-world industrial performance measurements and should not be interpreted as guarantees of detection accuracy in an actual industrial environment.
