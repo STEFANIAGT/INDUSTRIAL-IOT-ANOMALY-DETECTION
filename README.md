@@ -223,7 +223,7 @@ INDUSTRIAL-IOT-ANOMALY-DETECTION/
 ├── data/
 │   └── training_normal.csv
 ├── in-cse-runtime/
-│   └── acme.ini
+│   └── acme.example.ini
 ├── models/
 │   ├── anomaly_model.joblib
 │   └── anomaly_model_v2.joblib
@@ -243,7 +243,7 @@ INDUSTRIAL-IOT-ANOMALY-DETECTION/
 │   ├── train_model.py
 │   └── tune_model_v2.py
 ├── .gitignore
-├── acme.ini
+├── acme.example.ini
 ├── README.md
 └── requirements.txt
 ```
@@ -290,7 +290,13 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```powershell
 pip install -r requirements.txt
 ```
+### 4. Create the local ACME configuration files
 
+The repository contains example ACME configuration files. Copy them before starting the CSEs:
+
+```powershell
+Copy-Item acme.example.ini acme.ini
+Copy-Item .\in-cse-runtime\acme.example.ini .\in-cse-runtime\acme.ini
 ---
 
 # Running the Prototype
