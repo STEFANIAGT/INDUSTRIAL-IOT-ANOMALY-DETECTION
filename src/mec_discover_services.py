@@ -1,14 +1,28 @@
+import os
+import sys
+
 import requests
 
-MEC_SERVICE_MGMT_BASE = "https://try-mec.etsi.org/sbxr49ri7d/mep1/mec_service_mgmt/v1"
-APP_INSTANCE_ID = "1824d9cb-41bb-4f68-a312-09e3bcf99a1c"
+
+MEC_SERVICE_MGMT_BASE = os.getenv("MEC_SERVICE_MGMT_BASE")
+APP_INSTANCE_ID = os.getenv("MEC_APP_INSTANCE_ID")
+
+
+def require_env(name, value):
+    if not value:
+        print(f"[ERROR] Environment variable {name} is not configured.")
+        print("Configure the MEC Sandbox values in PowerShell before running this script.")
+        sys.exit(1)
 
 
 def main():
+    require_env("MEC_SERVICE_MGMT_BASE", MEC_SERVICE_MGMT_BASE)
+
     url = f"{MEC_SERVICE_MGMT_BASE}/services"
 
     print("Discovering MEC services available on mep1...")
-    print(f"Application Instance ID: {APP_INSTANCE_ID}")
+    if APP_INSTANCE_ID:
+        print(f"Application Instance ID: {APP_INSTANCE_ID}")
     print(f"GET {url}")
     print()
 
@@ -19,8 +33,8 @@ def main():
             timeout=15,
         )
     except requests.RequestException as exc:
-        print(f"[ERROR] Cannot contact ETSI MEC Sandbox: {exc}")
-        raise SystemExit(1)
+        print(f"[ERROR] MEC service discovery failed: {exc}")
+        sys.exit(1)
 
     print(f"HTTP {response.status_code}")
 
@@ -28,40 +42,41 @@ def main():
         print("[ERROR] MEC service discovery failed.")
         if response.text:
             print(response.text)
-        raise SystemExit(1)
+        sys.exit(1)
 
     try:
         data = response.json()
     except ValueError:
         print("[ERROR] MEC Sandbox returned a non-JSON response.")
         print(response.text)
-        raise SystemExit(1)
+        sys.exit(1)
 
-    services = data if isinstance(data, list) else data.get("serviceInfo", data)
+    services = data if isinstance(data, list) else data.get("services", [])
 
-    print("[OK] MEC service discovery succeeded.")
-    print()
+    print(f"[OK] Discovered {len(services)} MEC service(s).")
 
-    if isinstance(services, list):
-        print(f"Services discovered: {len(services)}")
-        for service in services:
-            if not isinstance(service, dict):
-                print(f" - {service}")
-                continue
-            name = service.get("serName", "unknown")
-            state = service.get("state", "unknown")
-            version = service.get("version", "unknown")
-            instance_id = service.get("serInstanceId", "unknown")
-            print(
-                f" - {name} | state={state} | version={version} | "
-                f"id={instance_id}"
-            )
-    else:
-        print(services)
+    for index, service in enumerate(services, start=1):
+        if not isinstance(service, dict):
+            print(f"  {index}. {service}")
+            continue
 
-    print()
-    print("DONE. elektra-anomaly-ae can interact with MEC Service Management.")
+        name = (
+            service.get("serName")
+            or service.get("name")
+            or service.get("serInstanceId")
+            or "Unnamed service"
+        )
+
+        state = service.get("state") or service.get("serAvailability") or "unknown"
+        version = service.get("version")
+
+        details = [f"name={name}", f"state={state}"]
+        if version is not None:
+            details.append(f"version={version}")
+
+        print(f"  {index}. " + " | ".join(details))
 
 
 if __name__ == "__main__":
     main()
+
