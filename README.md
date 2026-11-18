@@ -505,21 +505,58 @@ The current MEC integration uses an externally created MEC Application Instance.
 
 The corresponding local scripts are:
 
-```
+```text
 src/mec_confirm_ready.py
 src/mec_discover_services.py
-
 ```
 
-Before using these scripts in a new Sandbox session, update the configuration values inside them with:
+The MEC Sandbox session URL and Application Instance ID are not hard-coded in the repository because they can change between Sandbox sessions.
 
-- The MEC Sandbox service base path.
-- The MEC Application Instance ID.
+Before running the MEC scripts, configure the current Sandbox values as environment variables.
+
+In PowerShell:
+
+```powershell
+$env:MEC_APP_SUPPORT_BASE="https://try-mec.etsi.org/<SANDBOX_ID>/mep1/mec_app_support/v2"
+$env:MEC_SERVICE_MGMT_BASE="https://try-mec.etsi.org/<SANDBOX_ID>/mep1/mec_service_mgmt/v1"
+$env:MEC_APP_INSTANCE_ID="<YOUR_APPLICATION_INSTANCE_ID>"
+```
+
+Replace `<SANDBOX_ID>` and `<YOUR_APPLICATION_INSTANCE_ID>` with the values provided by the current ETSI MEC Sandbox session.
+
+Then run:
+
+```powershell
+python src\mec_confirm_ready.py
+```
+
+A successful readiness confirmation returns:
+
+```text
+HTTP 204
+```
+
+Service discovery can then be executed with:
+
+```powershell
+python src\mec_discover_services.py
+```
+
+A successful request returns:
+
+```text
+HTTP 200
+```
+
+together with the available MEC services.
 
 The interaction flow is:
 
-```
+```text
 Create MEC Application Instance
+             |
+             v
+Configure MEC environment variables
              |
              v
 mec_confirm_ready.py
@@ -532,12 +569,9 @@ mec_discover_services.py
              |
              v
 HTTP 200 + available services
-
 ```
 
 The scripts demonstrate MEC application readiness confirmation and service discovery through the ETSI MEC APIs.
-
----
 
 ## Machine Learning
 
